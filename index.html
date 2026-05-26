@@ -394,6 +394,11 @@
           <div><div class="setting-name" style="color:var(--red)">Factory reset</div><div class="setting-desc">Wipe everything — start from zero</div></div>
           <svg width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" viewBox="0 0 24 24"><polyline points="9 18 15 12 9 6"/></svg>
         </div>
+        <div style="height:1px;background:var(--border);margin:0 16px;"></div>
+        <div class="setting-row" style="cursor:pointer" onclick="factoryReset()">
+          <div><div class="setting-name" style="color:var(--red)">Factory reset</div><div class="setting-desc">Wipe everything — start from zero</div></div>
+          <svg width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" viewBox="0 0 24 24"><polyline points="9 18 15 12 9 6"/></svg>
+        </div>
       </div>
     </div>
     <div class="scroll-pad"></div>
@@ -1142,6 +1147,14 @@ function factoryReset(){
   showToast('Reset complete — reloading…');
   setTimeout(()=>location.reload(),1200);
 }
+
+function factoryReset(){
+  if(!confirm('Factory reset? This wipes ALL transactions and settings permanently.')) return;
+  if(!confirm('Are you sure? There is no going back.')) return;
+  localStorage.clear();
+  showToast('Reset complete — reloading…');
+  setTimeout(()=>location.reload(),1200);
+}
 // ─── CSV IMPORT ───────────────────────────────────────────────────────────────
 function handleFileImport(event){
   const file=event.target.files[0];if(!file) return;
@@ -1156,73 +1169,56 @@ function handleFileImport(event){
   reader.readAsText(file);
 }
 function parseAndImport(text,filename){
-  const lines=text.split(/
-?
-/).filter(l=>l.trim());
+  const lines=text.split(/\r?\n/).filter(l=>l.trim());
   if(lines.length<2){showToast('File appears empty');return;}
   const header=parseCSVLine(lines[0]).map(h=>h.trim().toLowerCase());
 
-  // ── Revolut CSV ──
+  // Revolut: Type,Product,Started Date,Completed Date,Description,Amount,Fee,Currency,State,Balance
   if(header.includes('completed date')&&header.includes('currency')&&header.includes('state')){
-    const typeIdx=header.indexOf('type');
-    const dateIdx=header.indexOf('completed date');
-    const descIdx=header.indexOf('description');
-    const amtIdx=header.indexOf('amount');
-    const curIdx=header.indexOf('currency');
+    const typeIdx=header.indexOf('type'),dateIdx=header.indexOf('completed date'),descIdx=header.indexOf('description'),amtIdx=header.indexOf('amount'),curIdx=header.indexOf('currency');
     let imported=0,skipped=0;const newTxns=[];
     for(let i=1;i<lines.length;i++){
-      const cols=parseCSVLine(lines[i]);if(cols.length<6) continue;
-      const type=(cols[typeIdx]||'').toLowerCase();
-      if(!type.includes('card payment')){skipped++;continue;}
+      const cols=parseCSVLine(lines[i]);if(cols.length<6)continue;
+      if(!(cols[typeIdx]||'').toLowerCase().includes('card payment')){skipped++;continue;}
       const amt=Math.abs(parseFloat((cols[amtIdx]||'').replace(/[^0-9.\-]/g,'')));
       if(!amt||isNaN(amt)){skipped++;continue;}
-      const rawDate=cols[dateIdx]||'';
-      const dateStr=parseDate(rawDate);if(!dateStr){skipped++;continue;}
+      const rawDate=cols[dateIdx]||'';const dateStr=parseDate(rawDate);if(!dateStr){skipped++;continue;}
       const desc=(cols[descIdx]||'Payment').replace(/"/g,'').trim()||'Payment';
-      const currency=(cols[curIdx]||'').trim();
-      const cat=guessCat(desc);
-      const timeStr=rawDate.match(/(\d{1,2}:\d{2})/)?rawDate.match(/(\d{1,2}:\d{2})/)[1]:'00:00';
-      const isDup=transactions.some(t=>t.date===dateStr&&Math.abs(t.amount-amt)<0.01&&t.merchant===desc);
-      if(isDup){skipped++;continue;}
-      newTxns.push({id:'rv'+Date.now().toString(36)+Math.random().toString(36).slice(2)+i,amount:amt,merchant:desc,cat,date:dateStr,time:timeStr,ts:new Date(dateStr).getTime(),source:'Revolut',currency});
+      const cat=guessCat(desc);const timeStr=rawDate.match(/(\d{1,2}:\d{2})/)?rawDate.match(/(\d{1,2}:\d{2})/)[1]:'00:00';
+      if(transactions.some(t=>t.date===dateStr&&Math.abs(t.amount-amt)<0.01&&t.merchant===desc)){skipped++;continue;}
+      newTxns.push({id:'rv'+Date.now().toString(36)+Math.random().toString(36).slice(2)+i,amount:amt,merchant:desc,cat,date:dateStr,time:timeStr,ts:new Date(dateStr).getTime(),source:'Revolut',currency:(cols[curIdx]||'').trim()});
       imported++;
     }
-    transactions=[...transactions,...newTxns];
-    saveData(transactions);renderHome();renderTxns();
+    transactions=[...transactions,...newTxns];saveData(transactions);renderHome();renderTxns();
     showToast(`✓ Revolut: ${imported} payments imported${skipped?' ('+skipped+' skipped)':''}`);
     document.getElementById('csv-file-input').value='';return;
   }
 
-  // ── Nexo CSV ──
+  // Nexo: Transaction,Type,Input Currency,Input Amount,Output Currency,Output Amount,USD Equivalent,Details,Outstanding Loan,Date/Time
   let amtIdx=-1,dateIdx=-1,descIdx=-1,typeIdx=-1;
   header.forEach((h,i)=>{
-    if(h==='output amount') amtIdx=i;
-    if(h.match(/date.*time|date\/time/)) dateIdx=i;
-    if(h==='details') descIdx=i;
-    if(h==='type') typeIdx=i;
+    if(h==='output amount')amtIdx=i;
+    if(h.match(/date.*time|date\/time/))dateIdx=i;
+    if(h==='details')descIdx=i;
+    if(h==='type')typeIdx=i;
   });
   if(amtIdx===-1&&header.length>=10){amtIdx=5;dateIdx=9;descIdx=7;typeIdx=1;}
   if(amtIdx===-1||dateIdx===-1){showToast('Format not recognised. Try Nexo or Revolut CSV.');return;}
-
   let imported=0,skipped=0;const newTxns=[];
   for(let i=1;i<lines.length;i++){
-    const cols=parseCSVLine(lines[i]);if(cols.length<3) continue;
+    const cols=parseCSVLine(lines[i]);if(cols.length<3)continue;
     const type=(typeIdx>=0?cols[typeIdx]||'':'').toLowerCase();
     if(type&&!type.match(/card.*purchase|card.*payment/)){skipped++;continue;}
     const amt=parseFloat((cols[amtIdx]||'').replace(/[^0-9.]/g,''));
     if(!amt||amt<=0){skipped++;continue;}
-    const rawDate=cols[dateIdx]||'';
-    const dateStr=parseDate(rawDate);if(!dateStr){skipped++;continue;}
+    const rawDate=cols[dateIdx]||'';const dateStr=parseDate(rawDate);if(!dateStr){skipped++;continue;}
     const desc=(descIdx>=0?cols[descIdx]||'':'Payment').replace(/"/g,'').trim()||'Payment';
-    const cat=guessCat(desc);
-    const timeStr=rawDate.match(/(\d{1,2}:\d{2})/)?rawDate.match(/(\d{1,2}:\d{2})/)[1]:'00:00';
-    const isDup=transactions.some(t=>t.date===dateStr&&Math.abs(t.amount-amt)<0.01&&t.merchant===desc);
-    if(isDup){skipped++;continue;}
+    const cat=guessCat(desc);const timeStr=rawDate.match(/(\d{1,2}:\d{2})/)?rawDate.match(/(\d{1,2}:\d{2})/)[1]:'00:00';
+    if(transactions.some(t=>t.date===dateStr&&Math.abs(t.amount-amt)<0.01&&t.merchant===desc)){skipped++;continue;}
     newTxns.push({id:'nx'+Date.now().toString(36)+Math.random().toString(36).slice(2)+i,amount:amt,merchant:desc,cat,date:dateStr,time:timeStr,ts:new Date(dateStr).getTime(),source:'Nexo'});
     imported++;
   }
-  transactions=[...transactions,...newTxns];
-  saveData(transactions);renderHome();renderTxns();
+  transactions=[...transactions,...newTxns];saveData(transactions);renderHome();renderTxns();
   showToast(`✓ Nexo: ${imported} transactions imported${skipped?' ('+skipped+' skipped)':''}`);
   document.getElementById('csv-file-input').value='';
 }
