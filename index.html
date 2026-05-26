@@ -359,12 +359,7 @@
         <div class="import-zone-text">Tap to import CSV</div>
         <div class="import-zone-sub">Supports Revolut &amp; Nexo CSV exports</div>
       </div>
-      <input type="file" id="csv-file-input" accept=".csv" onchange="handleFileImport(event)">
-      <div style="margin-top:10px;padding:10px 12px;background:var(--surface2);border-radius:10px;font-size:12px;color:var(--text2);line-height:1.6;">
-        <strong style="color:var(--text3);font-size:11px;letter-spacing:.5px;">HOW TO EXPORT</strong><br>
-        <strong>Revolut:</strong> App → Accounts → ↓ icon → CSV<br>
-        <strong>Nexo:</strong> nexo.com → Transactions → Export CSV
-      </div>
+      <input type="file" id="csv-file-input" accept=".csv,.xlsx,.xls" onchange="handleFileImport(event)">
     </div>
 
     <div class="section-title">SHORTCUTS SETUP</div>
@@ -391,7 +386,12 @@
     <div class="settings-section">
       <div class="settings-card">
         <div class="setting-row" style="cursor:pointer" onclick="clearData()">
-          <div><div class="setting-name" style="color:var(--red)">Clear all data</div><div class="setting-desc">Erase all transactions</div></div>
+          <div><div class="setting-name" style="color:var(--red)">Clear all transactions</div><div class="setting-desc">Erase all transactions, keep settings</div></div>
+          <svg width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" viewBox="0 0 24 24"><polyline points="9 18 15 12 9 6"/></svg>
+        </div>
+        <div style="height:1px;background:var(--border);margin:0 16px;"></div>
+        <div class="setting-row" style="cursor:pointer" onclick="factoryReset()">
+          <div><div class="setting-name" style="color:var(--red)">Factory reset</div><div class="setting-desc">Wipe everything — start from zero</div></div>
           <svg width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" viewBox="0 0 24 24"><polyline points="9 18 15 12 9 6"/></svg>
         </div>
       </div>
@@ -438,6 +438,10 @@
     <div class="form-group">
       <label class="form-label">Merchant / Description</label>
       <input class="text-input" id="merchant-input" type="text" placeholder="e.g. Starbucks, Uber…">
+    </div>
+    <div class="form-group">
+      <label class="form-label">Date</label>
+      <input class="text-input" id="date-input" type="date" style="color:var(--text);background:var(--surface2);border:1px solid var(--border);border-radius:12px;padding:12px 14px;font-size:16px;font-family:inherit;width:100%;">
     </div>
     <div class="form-group">
       <label class="form-label">Category</label>
@@ -1026,6 +1030,7 @@ function openAddModal(prefillAmount,prefillMerchant){
     selectedCat=guessCat(prefillMerchant);
     grid.querySelectorAll('.cat-chip').forEach(el=>el.classList.toggle('sel',el.dataset.id===selectedCat));
   } else document.getElementById('merchant-input').value='';
+  document.getElementById('date-input').value=todayStr();
   document.getElementById('add-overlay').classList.add('open');
   setTimeout(()=>{if(!prefillAmount) document.getElementById('amt-input').focus();},350);
 }
@@ -1035,10 +1040,11 @@ function saveTransaction(){
   const amtVal=parseFloat(document.getElementById('amt-input').value);
   if(!amtVal||amtVal<=0){showToast('Enter a valid amount');return;}
   const merchant=document.getElementById('merchant-input').value.trim()||'Payment';
+  const pickedDate=document.getElementById('date-input').value||todayStr();
   const now=new Date();
-  const dateStr=`${now.getFullYear()}-${pad(now.getMonth()+1)}-${pad(now.getDate())}`;
+  const dateStr=pickedDate;
   const timeStr=now.toLocaleTimeString('en-GB',{hour:'2-digit',minute:'2-digit'});
-  const txn={id:Date.now().toString(36)+Math.random().toString(36).slice(2),amount:amtVal,merchant,cat:selectedCat,date:dateStr,time:timeStr,ts:now.getTime()};
+  const txn={id:Date.now().toString(36)+Math.random().toString(36).slice(2),amount:amtVal,merchant,cat:selectedCat,date:dateStr,time:timeStr,ts:new Date(dateStr).getTime()};
   transactions.push(txn);
   saveData(transactions);
   closeAddModal();
@@ -1127,6 +1133,15 @@ function renderSettings(){
 // ─── CLEAR ────────────────────────────────────────────────────────────────────
 function clearData(){if(!confirm('Delete ALL transactions? This cannot be undone.'))return;transactions=[];saveData(transactions);renderHome();renderTxns();showToast('All data cleared');}
 
+
+
+function factoryReset(){
+  if(!confirm('Factory reset? This wipes ALL transactions and settings permanently.')) return;
+  if(!confirm('Are you sure? There is no going back.')) return;
+  localStorage.clear();
+  showToast('Reset complete — reloading…');
+  setTimeout(()=>location.reload(),1200);
+}
 // ─── CSV IMPORT ───────────────────────────────────────────────────────────────
 function handleFileImport(event){
   const file=event.target.files[0];if(!file) return;
@@ -1140,34 +1155,29 @@ function handleFileImport(event){
   };
   reader.readAsText(file);
 }
-
 function parseAndImport(text,filename){
-  const lines=text.split(/\r?\n/).filter(l=>l.trim());
+  const lines=text.split(/
+?
+/).filter(l=>l.trim());
   if(lines.length<2){showToast('File appears empty');return;}
   const header=parseCSVLine(lines[0]).map(h=>h.trim().toLowerCase());
 
   // ── Revolut CSV ──
-  // Columns: Type,Product,Started Date,Completed Date,Description,Amount,Fee,Currency,State,Balance
-  if(header.includes('completed date') && header.includes('currency') && header.includes('state')){
+  if(header.includes('completed date')&&header.includes('currency')&&header.includes('state')){
     const typeIdx=header.indexOf('type');
     const dateIdx=header.indexOf('completed date');
     const descIdx=header.indexOf('description');
     const amtIdx=header.indexOf('amount');
     const curIdx=header.indexOf('currency');
-    let imported=0,skipped=0;
-    const newTxns=[];
+    let imported=0,skipped=0;const newTxns=[];
     for(let i=1;i<lines.length;i++){
-      const cols=parseCSVLine(lines[i]);
-      if(cols.length<6) continue;
+      const cols=parseCSVLine(lines[i]);if(cols.length<6) continue;
       const type=(cols[typeIdx]||'').toLowerCase();
-      // Only card payments
-      if(!type.includes('card payment')) {skipped++;continue;}
-      const rawAmt=cols[amtIdx]||'';
-      const amt=Math.abs(parseFloat(rawAmt.replace(/[^0-9.\-]/g,'')));
+      if(!type.includes('card payment')){skipped++;continue;}
+      const amt=Math.abs(parseFloat((cols[amtIdx]||'').replace(/[^0-9.\-]/g,'')));
       if(!amt||isNaN(amt)){skipped++;continue;}
       const rawDate=cols[dateIdx]||'';
-      const dateStr=parseDate(rawDate);
-      if(!dateStr){skipped++;continue;}
+      const dateStr=parseDate(rawDate);if(!dateStr){skipped++;continue;}
       const desc=(cols[descIdx]||'Payment').replace(/"/g,'').trim()||'Payment';
       const currency=(cols[curIdx]||'').trim();
       const cat=guessCat(desc);
@@ -1180,12 +1190,10 @@ function parseAndImport(text,filename){
     transactions=[...transactions,...newTxns];
     saveData(transactions);renderHome();renderTxns();
     showToast(`✓ Revolut: ${imported} payments imported${skipped?' ('+skipped+' skipped)':''}`);
-    document.getElementById('csv-file-input').value='';
-    return;
+    document.getElementById('csv-file-input').value='';return;
   }
 
   // ── Nexo CSV ──
-  // Columns: Transaction, Type, Input Currency, Input Amount, Output Currency, Output Amount, USD Equivalent, Details, Outstanding Loan, Date / Time
   let amtIdx=-1,dateIdx=-1,descIdx=-1,typeIdx=-1;
   header.forEach((h,i)=>{
     if(h==='output amount') amtIdx=i;
@@ -1194,25 +1202,17 @@ function parseAndImport(text,filename){
     if(h==='type') typeIdx=i;
   });
   if(amtIdx===-1&&header.length>=10){amtIdx=5;dateIdx=9;descIdx=7;typeIdx=1;}
+  if(amtIdx===-1||dateIdx===-1){showToast('Format not recognised. Try Nexo or Revolut CSV.');return;}
 
-  if(amtIdx===-1||dateIdx===-1){
-    showToast('Format not recognised. Try Nexo or Revolut CSV.');
-    return;
-  }
-
-  let imported=0,skipped=0;
-  const newTxns=[];
+  let imported=0,skipped=0;const newTxns=[];
   for(let i=1;i<lines.length;i++){
-    const cols=parseCSVLine(lines[i]);
-    if(cols.length<3) continue;
+    const cols=parseCSVLine(lines[i]);if(cols.length<3) continue;
     const type=(typeIdx>=0?cols[typeIdx]||'':'').toLowerCase();
-    if(type&&!type.match(/card.*purchase|card.*payment/)) {skipped++;continue;}
-    const rawAmt=cols[amtIdx]||'';
-    const amt=parseFloat(rawAmt.replace(/[^0-9.]/g,''));
+    if(type&&!type.match(/card.*purchase|card.*payment/)){skipped++;continue;}
+    const amt=parseFloat((cols[amtIdx]||'').replace(/[^0-9.]/g,''));
     if(!amt||amt<=0){skipped++;continue;}
     const rawDate=cols[dateIdx]||'';
-    const dateStr=parseDate(rawDate);
-    if(!dateStr){skipped++;continue;}
+    const dateStr=parseDate(rawDate);if(!dateStr){skipped++;continue;}
     const desc=(descIdx>=0?cols[descIdx]||'':'Payment').replace(/"/g,'').trim()||'Payment';
     const cat=guessCat(desc);
     const timeStr=rawDate.match(/(\d{1,2}:\d{2})/)?rawDate.match(/(\d{1,2}:\d{2})/)[1]:'00:00';
@@ -1226,7 +1226,6 @@ function parseAndImport(text,filename){
   showToast(`✓ Nexo: ${imported} transactions imported${skipped?' ('+skipped+' skipped)':''}`);
   document.getElementById('csv-file-input').value='';
 }
-
 function parseCSVLine(line){
   const result=[];let cur='';let inQuote=false;
   for(let i=0;i<line.length;i++){
